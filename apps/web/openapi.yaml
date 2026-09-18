@@ -1,0 +1,25 @@
+openapi: 3.0.3
+info: { title: Billetera API (Next.js, para V0), version: 0.1.0 }
+servers: [{ url: http://localhost:3000/api/v1, description: Local Docker }]
+paths:
+  /transfers:
+    post:
+      summary: Transferencia P2P idempotente
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [source_account_id, dest_alias, amount], properties: { source_account_id: { type: string }, dest_alias: { type: string, example: juan.mp }, amount: { type: string, example: "1500.00" }, currency: { type: string, default: ARS }, memo: { type: string } } }
+      responses: { "201": { description: Creada }, "200": { description: Replay idempotente } }
+  /accounts/{id}/balance:
+    get:
+      summary: Saldo (Redis→Mongo→stale)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: OK } }
+  /accounts/{id}/transactions:
+    get:
+      summary: Historial paginado por cursor
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: cursor, in: query, schema: { type: string } }, { name: limit, in: query, schema: { type: integer, default: 20 } }]
+      responses: { "200": { description: OK } }

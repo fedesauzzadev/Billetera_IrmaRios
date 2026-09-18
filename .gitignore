@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+*.log
+.env
+.env.local
+prisma/migrations/dev/
+*.db
+.DS_Store
+Thumbs.db

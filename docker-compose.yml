@@ -1,0 +1,116 @@
+# Todo dockerizado y gratuito. Solo necesitas Docker Desktop.
+# Levantar: docker compose up --build
+# App Next.js: http://localhost:3000  |  Redpanda console: http://localhost:8080
+
+name: billetera
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: billetera
+      POSTGRES_USER: billetera
+      POSTGRES_PASSWORD: billetera
+    ports: ["5544:5432"] # host 5544: 5432/5433/5434 ocupados por otros proyectos locales
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U billetera"], interval: 5s, retries: 10 }
+    networks: [billetera-net]
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.1
+    command:
+      - redpanda start
+      - --smp 1 --memory 1G
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --schema-registry-addr 0.0.0.0:8081
+      - --rpc-addr 0.0.0.0:33145
+      - --mode dev-container
+    ports: ["19092:19092", "18082:8082", "18081:8081"] # 8080-8082 ocupados por otros proyectos
+    volumes: [redpandadata:/var/lib/redpanda/data]
+    healthcheck: { test: ["CMD-SHELL", "rpk cluster health | grep -i healthy || exit 1"], interval: 10s, retries: 12 }
+    networks: [billetera-net]
+
+  # Consola web gratuita de Redpanda (para APRENDER: ver tópicos, mensajes, particiones)
+  console:
+    image: redpandadata/console:v2.5.0
+    depends_on: [redpanda]
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      REDPANDA_ADMIN_API_URL: http://redpanda:9644
+    ports: ["18080:8080"]
+    networks: [billetera-net]
+
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+    volumes: [mongodata:/data/db]
+    healthcheck: { test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"], interval: 10s, retries: 8 }
+    networks: [billetera-net]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6381:6379"] # host 6381: 6379/6380 ocupados por otros proyectos
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+    networks: [billetera-net]
+
+  app:
+    build: { context: ./apps/web }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redpanda: { condition: service_started }
+      mongo: { condition: service_started }
+      redis: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://billetera:billetera@postgres:5432/billetera
+      REDPANDA_BROKERS: redpanda:29092
+      MONGO_URL: mongodb://mongo:27017/billetera
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: dev-secret-cambia-en-prod
+      NEXT_TELEMETRY_DISABLED: 1
+    ports: ["3000:3000"]
+    volumes: ["./apps/web:/app", "/app/node_modules", "/app/.next"]
+    command: sh -c "npx prisma migrate deploy || npx prisma db push; npm run dev"
+    networks: [billetera-net]
+
+  outbox-relay:
+    build: { context: ./apps/web }
+    depends_on: [postgres, redpanda, app]
+    environment:
+      DATABASE_URL: postgresql://billetera:billetera@postgres:5432/billetera
+      REDPANDA_BROKERS: redpanda:29092
+    command: npm run worker:outbox
+    volumes: ["./apps/web:/app", "/app/node_modules"]
+    restart: unless-stopped
+    networks: [billetera-net]
+
+  balance-projector:
+    build: { context: ./apps/web }
+    depends_on: [redpanda, mongo, redis]
+    environment:
+      REDPANDA_BROKERS: redpanda:29092
+      MONGO_URL: mongodb://mongo:27017/billetera
+      REDIS_URL: redis://redis:6379
+    command: npm run worker:balance
+    volumes: ["./apps/web:/app", "/app/node_modules"]
+    restart: unless-stopped
+    networks: [billetera-net]
+
+  history-projector:
+    build: { context: ./apps/web }
+    depends_on: [redpanda, mongo]
+    environment:
+      REDPANDA_BROKERS: redpanda:29092
+      MONGO_URL: mongodb://mongo:27017/billetera
+    command: npm run worker:history
+    volumes: ["./apps/web:/app", "/app/node_modules"]
+    restart: unless-stopped
+    networks: [billetera-net]
+
+volumes: { pgdata: {}, redpandadata: {}, mongodata: {}, redisdata: {} }
+networks: { billetera-net: { driver: bridge } }
