@@ -50,3 +50,30 @@ curl localhost:3000/api/v1/accounts/<id-irma>/transactions?limit=20
 - `docker compose logs -f outbox-relay` si no llegan eventos. `rpk topic list --brokers localhost:19092` (o Console :8080).
 - PG: `docker compose exec postgres psql -U billetera -c "SELECT count(*), min(created_at) FROM outbox WHERE dispatched_at IS NULL"`.
 - Reset total: `docker compose down -v && docker compose up --build`.
+
+## 7. Túnel Cloudflare rápido (exponer `localhost:3000` a V0)
+
+> El túnel es efímero: cada vez que se reinicia cambia la URL. Después de levantarlo,
+> actualiza `NEXT_PUBLIC_API_URL` en V0 con la URL nueva.
+
+```powershell
+# 1. Matar túnel viejo si quedó colgado (terminal cerrada, etc.)
+Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. Levantar túnel en segundo plano (log a archivo para no perder la URL)
+$cf="$env:TEMP\opencode\cloudflared.exe"
+$err="$env:TEMP\opencode\cloudflared-billetera.err"
+Remove-Item $err -ErrorAction SilentlyContinue
+Start-Process -FilePath $cf -ArgumentList "tunnel --url http://localhost:3000" -RedirectStandardError $err -WindowStyle Hidden
+
+# 3. Esperar y ver la URL pública (copiar/pegar en V0)
+Start-Sleep 12
+Select-String "https://.*trycloudflare.com" $err | Select-Object -Last 1
+
+# 4. Verificar que responde
+Invoke-RestMethod -Uri "<PEGA-LA-URL>/api/health" -TimeoutSec 20 | ConvertTo-Json
+```
+
+**Qué pedirle a tu LLM** (copiar/pegar en el chat):
+
+> Levanta el túnel Cloudflare local con la sección 7 de `apps/web/README-BACKEND.md` y pasame la URL pública nueva para poner en V0 como `NEXT_PUBLIC_API_URL=<URL>/api/v1`.
